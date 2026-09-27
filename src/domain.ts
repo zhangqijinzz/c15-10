@@ -1,6 +1,18 @@
-import type { EnergyDevice, EnergyEstimate, EnergyScenario, ScenarioSummary } from './types';
+import type { EnergyDevice, EnergyDocument, EnergyEstimate, EnergyScenario, ScenarioSummary } from './types';
 
 export const MAX_DAILY_HOURS = 24;
+
+// 会话内单调递增的序号：即使 Date.now() 与随机部分都相同，连续生成的编号也不会重复
+let idSequence = 0;
+
+export function createUniqueId(prefix: string, taken: ReadonlySet<string> = new Set()): string {
+  let id = '';
+  do {
+    idSequence += 1;
+    id = `${prefix}-${Date.now().toString(36)}-${idSequence.toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  } while (taken.has(id));
+  return id;
+}
 
 export const exampleScenario: EnergyScenario = {
   id: 'scenario-home',
@@ -60,5 +72,46 @@ export function formatNumber(value: number, digits = 2): string {
 }
 
 export function cloneScenario(source: EnergyScenario, id: string, name: string): EnergyScenario {
-  return { ...source, id, name, createdAt: new Date().toISOString(), devices: source.devices.map((device) => ({ ...device, id: `${id}-${device.id}` })) };
+  // 副本里的每台设备都重新分配编号，避免与源方案或既有数据撞号
+  const taken = new Set<string>();
+  const devices = source.devices.map((device) => {
+    const deviceId = createUniqueId('device', taken);
+    taken.add(deviceId);
+    return { ...device, id: deviceId };
+  });
+  return { ...source, id, name, createdAt: new Date().toISOString(), devices };
+}
+
+export interface DocumentRepair {
+  document: EnergyDocument;
+  repaired: boolean;
+}
+
+// 理顺本地旧数据：方案编号在文档内唯一，设备编号在其所属方案内唯一；
+// 重复出现时保留第一条，其余的重新分配编号
+export function repairDocumentIds(document: EnergyDocument): DocumentRepair {
+  let repaired = false;
+  const scenarioIds = new Set<string>();
+  const scenarios = document.scenarios.map((scenario) => {
+    let scenarioId = scenario.id;
+    if (scenarioIds.has(scenarioId)) {
+      scenarioId = createUniqueId('scenario', scenarioIds);
+      repaired = true;
+    }
+    scenarioIds.add(scenarioId);
+    const deviceIds = new Set<string>();
+    const devices = scenario.devices.map((device) => {
+      if (deviceIds.has(device.id)) {
+        const deviceId = createUniqueId('device', deviceIds);
+        deviceIds.add(deviceId);
+        repaired = true;
+        return { ...device, id: deviceId };
+      }
+      deviceIds.add(device.id);
+      return device;
+    });
+    const unchanged = scenarioId === scenario.id && devices.every((device, index) => device === scenario.devices[index]);
+    return unchanged ? scenario : { ...scenario, id: scenarioId, devices };
+  });
+  return repaired ? { document: { ...document, scenarios }, repaired: true } : { document, repaired: false };
 }
