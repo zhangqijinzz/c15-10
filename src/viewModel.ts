@@ -1,4 +1,6 @@
 import { cloneScenario, summarizeScenario, validateDevice, validateScenarioSettings } from './domain';
+import { uniqueId } from './ids';
+import { collectDeviceIds, collectScenarioIds, describeRepair, repairDocument } from './repair';
 import { findScenario, type EnergyRepository } from './repository';
 import type { EnergyDevice, EnergyDocument, EnergyScenario, Notice, ViewStatus } from './types';
 
@@ -25,7 +27,18 @@ export class EnergyLensViewModel {
 
   initialize(): void {
     try {
-      this.state = { document: this.repository.load(), status: 'ready', notice: null };
+      const { document, report } = repairDocument(this.repository.load());
+      if (report.repaired) {
+        // 旧数据存在重复编号：理顺后立即落库，避免下次打开再撞
+        try {
+          this.repository.save(document);
+        } catch {
+          // 落库失败不阻塞使用，内存中已是理顺后的数据
+        }
+        this.state = { document, status: 'ready', notice: { kind: 'info', text: describeRepair(report) ?? '' } };
+      } else {
+        this.state = { document, status: 'ready', notice: null };
+      }
     } catch {
       this.state = { document: null, status: 'error', notice: { kind: 'error', text: '本地数据读取失败，请刷新重试' } };
     }
@@ -57,8 +70,8 @@ export class EnergyLensViewModel {
 
   addDevice(): void {
     const scenario = this.activeScenario;
-    if (!scenario) return;
-    const device: EnergyDevice = { id: `device-${Date.now()}`, name: '新设备', watts: 100, dailyHours: 1 };
+    if (!scenario || !this.state.document) return;
+    const device: EnergyDevice = { id: uniqueId('device', collectDeviceIds(this.state.document.scenarios)), name: '新设备', watts: 100, dailyHours: 1 };
     this.commit((current) => ({ ...current, devices: [...current.devices, device] }), '已添加设备，可继续修改参数');
   }
 
@@ -86,9 +99,10 @@ export class EnergyLensViewModel {
   duplicateActive(): void {
     const source = this.activeScenario;
     if (!source || !this.state.document) return;
-    const id = `scenario-${Date.now()}`;
-    const copy = cloneScenario(source, id, `${source.name} · 副本`);
-    const document = { ...this.state.document, scenarios: [...this.state.document.scenarios, copy], activeScenarioId: id };
+    const scenarios = this.state.document.scenarios;
+    const id = uniqueId('scenario', collectScenarioIds(scenarios));
+    const copy = cloneScenario(source, id, `${source.name} · 副本`, collectDeviceIds(scenarios));
+    const document = { ...this.state.document, scenarios: [...scenarios, copy], activeScenarioId: id };
     this.persist(document, '方案已复制，现在可以修改副本');
   }
 

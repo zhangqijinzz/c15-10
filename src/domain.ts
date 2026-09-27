@@ -1,3 +1,4 @@
+import { uniqueId } from './ids';
 import type { EnergyDevice, EnergyEstimate, EnergyScenario, ScenarioSummary } from './types';
 
 export const MAX_DAILY_HOURS = 24;
@@ -59,6 +60,13 @@ export function formatNumber(value: number, digits = 2): string {
   return value.toLocaleString('zh-CN', { maximumFractionDigits: digits, minimumFractionDigits: digits });
 }
 
-export function cloneScenario(source: EnergyScenario, id: string, name: string): EnergyScenario {
-  return { ...source, id, name, createdAt: new Date().toISOString(), devices: source.devices.map((device) => ({ ...device, id: `${id}-${device.id}` })) };
+export function cloneScenario(source: EnergyScenario, id: string, name: string, takenDeviceIds: ReadonlySet<string> = new Set()): EnergyScenario {
+  // 设备重新编号：不复用源设备 id（避免与源方案及历史数据撞号），副本内部也互不重复
+  const taken = new Set(takenDeviceIds);
+  const devices = source.devices.map((device) => {
+    const deviceId = uniqueId('device', taken);
+    taken.add(deviceId);
+    return { ...device, id: deviceId };
+  });
+  return { ...source, id, name, createdAt: new Date().toISOString(), devices };
 }
